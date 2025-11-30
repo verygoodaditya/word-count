@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>♔ Butter Chess ♔ ─ Multiplayer Real-time</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100vh;
+        background: linear-gradient(135deg, #1a2a3a, #0f1924);
+        color: #eee;
+        font-family: "Segoe UI", sans-serif;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
+      }
+      h1 {
+        font-size: 2.5rem;
+        margin-bottom: 0.5rem;
+        text-shadow: 0 0 20px rgba(255, 215, 0, 0.6);
+      }
+      .container {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 20px;
+      }
+      .board {
+        width: min(90vw, 90vh, 600px);
+        aspect-ratio: 1;
+        background: #222;
+        border-radius: 16px;
+        padding: 12px;
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.8),
+          inset 0 0 40px rgba(255, 215, 0, 0.1);
+        background-image: linear-gradient(45deg, #333 25%, transparent 25%),
+          linear-gradient(-45deg, #333 25%, transparent 25%),
+          linear-gradient(45deg, transparent 75%, #333 75%),
+          linear-gradient(-45deg, transparent 75%, #333 75%);
+        background-size: 40px 40px;
+        background-position: 0 0, 0 20px, 20px -20px, -20px 0px;
+      }
+      .chessboard {
+        width: 100%;
+        height: 100%;
+        display: grid;
+        grid-template-columns: repeat(8, 1fr);
+        border: 8px solid #8b5a2b;
+        border-radius: 8px;
+        overflow: hidden;
+        box-shadow: inset 0 0 30px rgba(0, 0, 0, 0.7);
+      }
+      .square {
+        position: relative;
+        background: #eeeed2;
+        user-select: none;
+        cursor: pointer;
+      }
+      .square.black {
+        background: #769656;
+      }
+      .square.highlight {
+        box-shadow: inset 0 0 0 6px rgba(255, 255, 0, 0.7) !important;
+      }
+      .square.possible {
+        background: radial-gradient(
+          circle,
+          rgba(255, 255, 100, 0.8) 0%,
+          transparent 70%
+        );
+      }
+      .square.last-move {
+        background: rgba(255, 215, 0, 0.5) !important;
+      }
+      .square.check {
+        box-shadow: inset 0 0 0 6px rgba(255, 0, 0, 0.8) !important;
+      }
+      .piece {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        font-size: calc(min(90vw, 90vh, 600px) / 9);
+        text-shadow: 2px 2px 4px #000;
+        pointer-events: none;
+        transition: all 0.25s cubic-bezier(0.2, 0.8, 0.4, 1);
+      }
+      .piece.dragging {
+        opacity: 0.7;
+        z-index: 1000;
+        transform: translate(-50%, -50%) scale(1.4) !important;
+      }
+      .controls {
+        display: flex;
+        gap: 20px;
+        flex-wrap: wrap;
+        justify-content: center;
+      }
+      button {
+        padding: 12px 28px;
+        font-size: 1.1rem;
+        background: #8b5a2b;
+        color: #fff;
+        border: none;
+        border-radius: 50px;
+        cursor: pointer;
+        box-shadow: 0 8px 20px rgba(0, 0, 0, 0.4);
+        transition: all 0.3s;
+      }
+      button:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
+      }
+      #status {
+        font-size: 1.3rem;
+        padding: 10px 30px;
+        background: rgba(0, 0, 0, 0.4);
+        border-radius: 50px;
+        min-height: 24px;
+      }
+      #room {
+        padding: 10px 20px;
+        font-size: 1.2rem;
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 50px;
+        text-align: center;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>♔ Butter Chess ♔</h1>
+      <div id="room">Creating room...</div>
+      <div id="status">Connecting...</div>
+
+      <div class="board">
+        <div class="chessboard" id="board"></div>
+      </div>
+
+      <div class="controls">
+        <button onclick="newGame()">New Game</button>
+        <button onclick="copyLink()">Copy Invite Link</button>
+        <button onclick="flipBoard()">Flip Board</button>
+      </div>
+    </div>
+
+    <!-- Chess library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/1.0.0-beta.6/chess.min.js"></script>
+    <!-- PeerJS for real-time multiplayer (WebRTC) -->
+    <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+
+    <script>
+      // Unicode chess pieces
+      const pieces = {
+        K: "♔",
+        Q: "♕",
+        R: "♖",
+        B: "♗",
+        N: "♘",
+        P: "♙",
+        k: "♚",
+        q: "♛",
+        r: "♜",
+        b: "♝",
+        n: "♞",
+        p: "♟",
+      };
+
+      let game = new Chess();
+      let peer, conn;
+      let myColor = "w";
+      let boardEl = document.getElementById("board");
+      let selected = null;
+      let possibleMoves = [];
+      let lastMove = null;
+      let flipped = false;
+
+      // Initialize PeerJS
+      function initPeer() {
+        const urlParams = new URLSearchParams(window.location.search);
+        let id = urlParams.get("room");
+
+        peer = new Peer(id || undefined);
+
+        peer.on("open", (id) => {
+          const link = `${location.origin}${location.pathname}?room=${id}`;
+          document.getElementById("room").innerHTML = `
+      Room: <strong>${id}</strong><br>
+      <small>Share this link → ${link}</small>
+    `;
+          if (!urlParams.get("room"))
+            history.replaceState(null, null, `?room=${id}`);
+        });
+
+        // Incoming connection
+        peer.on("connection", (c) => {
+          if (conn) c.close();
+          conn = c;
+          setupConn();
+          document.getElementById("status").textContent =
+            "Opponent joined! White to move.";
+        });
+
+        // If we're joining
+        if (urlParams.get("room")) {
+          conn = peer.connect(urlParams.get("room"));
+          setupConn();
+          myColor = "b";
+          document.getElementById("status").textContent =
+            "Connected! Waiting for White...";
+        }
+      }
+
+      function setupConn() {
+        conn.on("open", () => {
+          conn.on("data", (data) => {
+            if (data.type === "move") {
+              makeMove(data.move, false);
+            } else if (data.type === "newgame") {
+              newGame();
+            }
+          });
+        });
+      }
+
+      function send(data) {
+        if (conn && conn.open) conn.send(data);
+      }
+
+      // Render board
+      function renderBoard() {
+        boardEl.innerHTML = "";
+        const board = flipped ? game.board().reverse() : game.board();
+
+        for (let row = 0; row < 8; row++) {
+          for (let col = 0; col < 8; col++) {
+            const square = board[row][flipped ? 7 - col : col];
+            const isBlack = (row + col) % 2 === 1;
+            const sqName =
+              String.fromCharCode(97 + (flipped ? 7 - col : col)) +
+              (flipped ? row + 1 : 8 - row);
+
+            const div = document.createElement("div");
+            div.className = `square ${isBlack ? "black" : ""}`;
+            div.dataset.square = sqName;
+
+            // Highlight last move
+            if (
+              lastMove &&
+              (lastMove.from === sqName || lastMove.to === sqName)
+            ) {
+              div.classList.add("last-move");
+            }
+
+            // Highlight check
+            if (
+              game.inCheck() &&
+              square &&
+              square.type === "k" &&
+              square.color === game.turn()
+            ) {
+              div.classList.add("check");
+            }
+
+            // Piece
+            if (square) {
+              const p = document.createElement("div");
+              p.className = "piece";
+              p.textContent =
+                pieces[
+                  square.color === "w" ? square.type.toUpperCase() : square.type
+                ];
+              div.appendChild(p);
+            }
+
+            // Click & drag
+            div.addEventListener("click", () => onSquareClick(sqName));
+
+            div.addEventListener("dragstart", (e) => e.preventDefault());
+            div.addEventListener("mousedown", (e) => {
+              if (
+                square &&
+                square.color === game.turn() &&
+                game.turn() === myColor
+              ) {
+                selected = sqName;
+                showPossibleMoves(sqName);
+                const piece = div.querySelector(".piece");
+                if (piece) piece.classList.add("dragging");
+              }
+            });
+
+            boardEl.appendChild(div);
+          }
+        }
+      }
+
+      function onSquareClick(square) {
+        if (!selected) {
+          if (game.get(square)?.color === myColor && game.turn() === myColor) {
+            selected = square;
+            showPossibleMoves(square);
+          }
+        } else {
+          const move = game.move({
+            from: selected,
+            to: square,
+            promotion: "q",
+          });
+          if (move) {
+            lastMove = { from: selected, to: square };
+            send({
+              type: "move",
+              move: { from: selected, to: square, promotion: "q" },
+            });
+            updateStatus();
+          }
+          clearHighlights();
+          selected = null;
+        }
+        renderBoard();
+      }
+
+      function showPossibleMoves(square) {
+        clearHighlights();
+        const moves = game.moves({ square, verbose: true });
+        possibleMoves = moves.map((m) => m.to);
+        document.querySelectorAll(".square").forEach((el) => {
+          if (el.dataset.square === square) el.classList.add("highlight");
+          if (possibleMoves.includes(el.dataset.square))
+            el.classList.add("possible");
+        });
+      }
+
+      function clearHighlights() {
+        document.querySelectorAll(".square").forEach((el) => {
+          el.classList.remove("highlight", "possible");
+        });
+      }
+
+      function makeMove(move, fromOpponent = true) {
+        const result = game.move(move);
+        if (result) {
+          lastMove = { from: move.from, to: move.to };
+          updateStatus();
+          renderBoard();
+        }
+      }
+
+      function updateStatus() {
+        if (game.isCheckmate()) {
+          document.getElementById("status").textContent = `Checkmate! ${
+            game.turn() === "w" ? "Black" : "White"
+          } wins! ♚`;
+        } else if (game.isDraw()) {
+          document.getElementById("status").textContent = "Draw!";
+        } else if (game.inCheck()) {
+          document.getElementById("status").textContent =
+            "Check! " + (game.turn() === "w" ? "White" : "Black") + " to move";
+        } else {
+          document.getElementById("status").textContent =
+            (game.turn() === "w" ? "White" : "Black") + " to move";
+        }
+      }
+
+      function newGame() {
+        game = new Chess();
+        lastMove = null;
+        selected = null;
+        renderBoard();
+        updateStatus();
+        send({ type: "newgame" });
+      }
+
+      function copyLink() {
+        navigator.clipboard.writeText(location.href);
+        alert("Link copied! Send it to your friend ♟️");
+      }
+
+      function flipBoard() {
+        flipped = !flipped;
+        renderBoard();
+      }
+
+      // Start
+      initPeer();
+      renderBoard();
+      updateStatus();
+
+      // Drag & drop support
+      document.addEventListener("mouseup", () => {
+        document
+          .querySelectorAll(".piece.dragging")
+          .forEach((p) => p.classList.remove("dragging"));
+      });
+    </script>
+  </body>
+</html>
